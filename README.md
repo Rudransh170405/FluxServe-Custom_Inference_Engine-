@@ -146,6 +146,34 @@ headline numbers together with how each was measured. Definitions:
 
 ---
 
+## Results: Qwen2.5-7B-Instruct on NVIDIA A100-SXM4-40GB (fp16)
+
+![Benchmark results](docs/benchmark_results.png)
+
+100-request suite, 64 max new tokens, 512 KV blocks of 16 tokens, max batch 16. Raw data: [`docs/benchmark_results.json`](docs/benchmark_results.json).
+
+| Metric | Result |
+|---|---|
+| Continuous batching, output throughput | **547.5 tok/s** (1505.0 prompt+output tok/s) |
+| Same 100 requests served one at a time | 63.2 tok/s, so batching is **8.66x** faster |
+| HF Transformers, static batching (same GPU) | 330.6 tok/s, so the engine is **1.66x** faster |
+| Decode ITL, B=1 (6,300 steps) | P50 **15.38 ms**, P90 15.55 ms, P99 **15.60 ms** (jitter 0.23 ms) |
+| CUDA graphs off → on, B=1 TPOT | 45.09 → **15.46 ms** (2.9x) |
+| CUDA graphs off → on, batched throughput | 252.7 → 458.8 tok/s |
+| TTFT, B=1 | mean 39.83 ms, P99 53.21 ms |
+| Prefill-only throughput (B=1, prefix cache off) | 3114.5 tok/s |
+| Prefix cache token hit rate | 65.2% (suite), 88.5% (shared-prefix cohort) |
+| KV waste: paged / exact-length static / max-length static | **5.0%** / 18.5% / 93.0% |
+| Reserved KV slots saved by prefix sharing | 33.7% |
+| WikiText-2 perplexity (298,716 tokens) | **8.461**, identical to HF Transformers on the same tokens |
+| Weights / KV pool / peak allocated | 15,231 MB / 471 MB / 16,017 MB |
+
+**Known issues in this run**
+- Decode correctness: the engine matched full-recompute greedy decoding on only 2/32 tokens. Decode attention computed Q·Kᵀ in fp16 before scaling, which overflows on Qwen2.5-7B and yields NaN logits. This is fixed in `kernels/paged_attention.py`, with a regression test in `scripts/example_run.py`, but the numbers above were measured **before** the fix, so decode outputs in this run were incorrect and decode timings may shift slightly on re-run. Perplexity uses the prefill path and is unaffected.
+- Prefix caching cuts prompt compute (88.5% cohort hit rate), but the shared-prefix cohort's TTFT did not improve (37.74 → 42.12 ms): at ~340-token prompts the cached-context attention path costs more than the compute it saves.
+
+---
+
 ## Remote Colab GPU Server + Standalone UI
 
 Run the inference engine on a Colab A100 GPU with model weights cached permanently on Google Drive, while hosting the chat & telemetry UI locally or on any static host:
